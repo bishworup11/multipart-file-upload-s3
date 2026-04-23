@@ -7,6 +7,7 @@ const {
   UploadPartCommand,
   CompleteMultipartUploadCommand,
   AbortMultipartUploadCommand,
+  ListPartsCommand,
 } = require('@aws-sdk/client-s3')
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner')
 
@@ -56,6 +57,7 @@ app.post('/api/v1/s3/initiate-upload', async (req, res) => {
       Bucket:      BUCKET,
       Key:         key,
       ContentType: file_type,
+      ChecksumAlgorithm: 'SHA256',
     }))
 
     console.log(`✅ Initiated upload: ${key} — UploadId: ${result.UploadId}`)
@@ -79,7 +81,7 @@ app.post('/api/v1/s3/initiate-upload', async (req, res) => {
 // POST /api/v1/s3/get-presigned-url
 // Body: { file_path, upload_id, part_number, file_type }
 app.post('/api/v1/s3/get-presigned-url', async (req, res) => {
-  const { file_path, upload_id, part_number, file_type } = req.body
+  const { file_path, upload_id, part_number, file_type, checksum_sha256 } = req.body
 
   if (!file_path || !upload_id || !part_number) {
     return res.status(422).json({ message: 'file_path, upload_id and part_number are required' })
@@ -92,6 +94,7 @@ app.post('/api/v1/s3/get-presigned-url', async (req, res) => {
       UploadId:      upload_id,
       PartNumber:    Number(part_number),
       ContentType:   file_type,
+      ChecksumSHA256: checksum_sha256,
     })
 
     // URL valid for 20 minutes
@@ -170,6 +173,34 @@ app.post('/api/v1/s3/abort-upload', async (req, res) => {
   }
 })
 
+// ─── 5. List uploaded parts ──────────────────────────────────────────────────
+// POST /api/v1/s3/list-parts
+// Body: { upload_id, file_path }
+app.post('/api/v1/s3/list-parts', async (req, res) => {
+  const { upload_id, file_path } = req.body
+
+  if (!upload_id || !file_path) {
+    return res.status(422).json({ message: 'upload_id and file_path are required' })
+  }
+
+  try {
+    const result = await s3.send(new ListPartsCommand({
+      Bucket:   BUCKET,
+      Key:      file_path,
+      UploadId: upload_id,
+    }))
+
+    console.log(`🔍 Listed parts for ${file_path}: ${result.Parts?.length || 0} parts found`)
+
+    res.json({
+      parts: result.Parts || [], // [{ PartNumber, ETag, Size, ... }, ...]
+    })
+  } catch (err) {
+    console.error('❌ list-parts error:', err.message)
+    res.status(500).json({ message: err.message })
+  }
+})
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
@@ -181,5 +212,6 @@ app.listen(PORT, () => {
   console.log('  POST /api/v1/s3/initiate-upload')
   console.log('  POST /api/v1/s3/get-presigned-url')
   console.log('  POST /api/v1/s3/complete-upload')
-  console.log('  POST /api/v1/s3/abort-upload\n')
+  console.log('  POST /api/v1/s3/abort-upload')
+  console.log('  POST /api/v1/s3/list-parts\n')
 })
